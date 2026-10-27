@@ -1,0 +1,314 @@
+---
+title: "Simulation and leave-one-out validation"
+author: "Guangyu Qiu"
+date: "2026-10-27"
+format: html
+---
+
+This implements the four tasks in `simulation.Rmd`. The original pseudocode is
+unchanged. Run the chunks in order, or render this document. Dependencies are
+`here` and `ggplot2`; `parallel` is included with R.
+
+# Task 1: Generate two datasets
+
+Both datasets share the same 50 rows of predictors. The CSV files include an
+explicit `intercept` column, but the fitting formula uses only `x1` through `x5`:
+R adds the model intercept automatically. Files use the existing `Data/` folder.
+
+The continuous model retains the original coefficients. The binary model uses
+the smaller coefficients agreed upon after the original values produced an
+imbalanced outcome and a nonconvergent logistic fit.
+
+```{r}
+#| label: simulate-data
+here::i_am("R/simulation.qmd")
+set.seed(648)
+
+n <- 50L
+X <- cbind(
+  intercept = rep(1, n),
+  x1 = rnorm(n, mean = 0, sd = 1),
+  x2 = rnorm(n, mean = 5, sd = 5),
+  x3 = rpois(n, lambda = 3),
+  x4 = rbinom(n, size = 1, prob = 0.3),
+  x5 = runif(n, min = 0, max = 10)
+)
+
+beta_cont <- c(1, 1, -0.5, 2, -2, 0.5)
+beta_binary <- c(-1, 0.3, -0.1, 0.3, -0.5, 0.1)
+
+cont <- data.frame(X, Y = drop(X %*% beta_cont) + rnorm(n, 0, 1))
+p <- plogis(drop(X %*% beta_binary))
+binary <- data.frame(X, Y = rbinom(n, size = 1, prob = p))
+
+dir.create(here::here("Data"), showWarnings = FALSE)
+write.csv(cont, here::here("Data", "cont.csv"), row.names = FALSE)
+write.csv(binary, here::here("Data", "binary.csv"), row.names = FALSE)
+
+# Read the saved datasets for the examples below.
+cont <- read.csv(here::here("Data", "cont.csv"))
+binary <- read.csv(here::here("Data", "binary.csv"))
+table(binary$Y)
+```
+
+# Task 2: Fit one model and return its coefficients
+
+`family` is a function such as `gaussian` or `binomial`; `link` is a string such
+as `"identity"` or `"logit"`. `model.frame()` collects the formula variables,
+then `model.matrix()` and `model.response()` extract the design and outcome.
+The arguments to `glm.fit()` are lowercase `x` and `y`.
+
+```{r}
+#| label: fit-function
+#' Fit a GLM and retain only its named coefficient vector.
+#' @param formula A model formula with a single numeric response.
+#' @param data A data frame containing the formula variables.
+#' @param family A GLM family function, for example gaussian or binomial.
+#' @param link A character string naming the link.
+#' @return A named numeric coefficient vector.
+fit_fun <- function(formula, data, family = gaussian, link = "identity") {
+  if (!is.function(family)) {
+    stop("family must be a function, such as gaussian or binomial.")
+  }
+  if (!is.character(link) || length(link) != 1L || is.na(link)) {
+    stop("link must be one string, such as 'identity' or 'logit'.")
+  }
+
+  mf <- stats::model.frame(formula, data = data, na.action = stats::na.fail)
+  X <- stats::model.matrix(attr(mf, "terms"), data = mf)
+  y <- stats::model.response(mf)
+  if (!is.numeric(y) || !is.null(dim(y))) {
+    stop("Use a single numeric response (0/1 for the binary example).")
+  }
+  if (any(!is.finite(X)) || any(!is.finite(y))) {
+    stop("Model variables must be finite and contain no missing values.")
+  }
+
+  fit <- stats::glm.fit(x = X, y = y, family = family(link = link))
+  if (!isTRUE(fit$converged)) {
+    stop("The GLM did not converge; inspect the data and model specification.")
+  }
+  if (fit$rank < ncol(X) || any(!is.finite(fit$coefficients))) {
+    stop("The model has coefficients that cannot be estimated uniquely.")
+  }
+  fit$coefficients
+}
+```
+
+# Task 3: Predict the omitted rows and create an S3 result
+
+The coefficient matrix has one row per omitted observation and one column per
+model coefficient. The prediction for row `i` uses only row `i` of that matrix:
+`sum(X[i, ] * beta[i, ])`. Column names align the coefficients with the design.
+
+The inverse link converts the linear predictor to the response scale. This is
+determined by the chosen family and link, regardless of the distributions of
+the predictors. For the binary example, predictions are probabilities.
+
+Here `bias` follows the pseudocode's direction: **predicted minus observed**.
+These are individual prediction errors, rather than an estimate of simulation
+bias across repeated datasets. MAE and RMSE use all rows; failed fits stop the
+calculation rather than silently removing observations.
+
+```{r}
+#| label: predictions-and-s3
+#' Make row-wise LOO predictions and assemble a result object.
+#' @param beta Matrix whose ith row contains coefficients fitted without row i.
+#' @param dat The original data frame, in its original row order.
+#' @param formula The formula used in every fit.
+#' @param family The family function used in every fit.
+#' @param link The link string used in every fit.
+#' @return An object of class loo_results.
+predict_fun <- function(beta, dat, formula, family = gaussian,
+                        link = "identity") {
+  mf <- stats::model.frame(formula, data = dat, na.action = stats::na.fail)
+  X <- stats::model.matrix(attr(mf, "terms"), data = mf)
+  y <- stats::model.response(mf)
+
+  if (!is.matrix(beta) || nrow(beta) != nrow(X) ||
+      ncol(beta) != ncol(X) ||
+      !setequal(colnames(beta), colnames(X))) {
+    stop("beta must have one row per observation and matching model columns.")
+  }
+  beta <- beta[, colnames(X), drop = FALSE]
+  family_spec <- family(link = link)
+  eta <- rowSums(X * beta)
+  pred <- family_spec$linkinv(eta)
+  if (any(!is.finite(pred))) {
+    stop("The model produced non-finite predictions.")
+  }
+  bias <- pred - y
+
+  results <- list(
+    formula = formula,
+    family = family_spec,
+    nrow = nrow(dat),
+    ncol = ncol(dat),
+    coefficients = beta,
+    observed = y,
+    predicted = pred,
+    bias = bias,
+    mae = mean(abs(bias)),
+    rmse = sqrt(mean(bias^2))
+  )
+  class(results) <- "loo_results"
+  results
+}
+
+#' @param x A loo_results object.
+#' @param ... Additional method arguments.
+#' @return The input object, invisibly.
+print.loo_results <- function(x, ...) {
+  cat("Leave-one-out prediction metrics\n")
+  cat(sprintf("MAE:  %.6f\nRMSE: %.6f\n", x$mae, x$rmse))
+  invisible(x)
+}
+
+#' @param object A loo_results object.
+#' @param ... Additional method arguments.
+#' @return The input object, invisibly, after displaying its summary.
+summary.loo_results <- function(object, ...) {
+  cat("Formula:", paste(deparse(object$formula), collapse = " "), "\n")
+  cat("Data:", object$nrow, "rows and", object$ncol, "columns\n")
+  cat("Family:", object$family$family,
+      "| Link:", object$family$link, "\n")
+  print(object)
+  invisible(object)
+}
+
+# A custom S3 method needs a generic with the matching name.
+#' @param x A result object.
+#' @param ... Additional method arguments.
+#' @return The dispatched plot.
+plot_bias <- function(x, ...) {
+  UseMethod("plot_bias")
+}
+
+#' @param x A loo_results object.
+#' @param bins Number of histogram bins.
+#' @param ... Reserved for additional arguments.
+#' @return A ggplot histogram of predicted minus observed errors.
+plot_bias.loo_results <- function(x, bins = 10L, ...) {
+  ggplot2::ggplot(data.frame(bias = x$bias), ggplot2::aes(x = bias)) +
+    ggplot2::geom_histogram(bins = bins, color = "white", fill = "steelblue") +
+    ggplot2::labs(
+      title = "LOO prediction errors",
+      x = "Predicted - observed", y = "Count"
+    ) +
+    ggplot2::theme_minimal()
+}
+```
+
+# Task 4: Run LOO, using four workers by default
+
+`data[-i, , drop = FALSE]` removes row `i` and keeps a data frame. `parLapplyLB()`
+assigns rows dynamically to available workers; it does not guarantee exactly
+equal work per worker. Its returned list stays in the input row order.
+`on.exit()` ensures that the cluster closes even if a fit fails.
+
+```{r}
+#| label: run-loo
+#' Run one-row-at-a-time LOO validation.
+#' @param formula A model formula.
+#' @param data The complete data frame.
+#' @param family A family function, for example gaussian or binomial.
+#' @param link A link string.
+#' @param workers Number of PSOCK workers; 1 runs serially for checking.
+#' @return An object of class loo_results.
+run_loo <- function(formula, data, family = gaussian, link = "identity",
+                    workers = 4L) {
+  if (!is.data.frame(data) || nrow(data) < 3L) {
+    stop("data must be a data frame with at least three rows.")
+  }
+  if (!is.numeric(workers) || length(workers) != 1L ||
+      !is.finite(workers) || workers < 1 || workers != floor(workers)) {
+    stop("workers must be a positive integer.")
+  }
+
+  indices <- seq_len(nrow(data))
+  if (workers == 1L) {
+    res <- lapply(indices, function(i) {
+      fit_fun(formula, data[-i, , drop = FALSE], family, link)
+    })
+  } else {
+    cl <- parallel::makePSOCKcluster(as.integer(workers))
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    parallel::clusterExport(
+      cl, c("fit_fun", "formula", "data", "family", "link"),
+      envir = environment()
+    )
+    res <- parallel::parLapplyLB(cl, indices, function(i) {
+      fit_fun(formula, data[-i, , drop = FALSE], family, link)
+    })
+  }
+
+  # Avoid silently combining coefficient vectors with different model columns.
+  same_columns <- vapply(res, function(b) {
+    identical(names(b), names(res[[1L]]))
+  }, logical(1))
+  if (!all(same_columns)) {
+    stop("The model columns changed between LOO fits.")
+  }
+  beta <- do.call(rbind, res)
+  predict_fun(beta, data, formula, family, link)
+}
+```
+
+# Examples
+
+These examples use numeric predictors, a numeric response, ordinary unweighted
+GLMs, and no missing data. Predictors with data-dependent transformations, new
+factor levels, offsets, or weights require additional handling and are outside
+this example's scope. Convergence warnings remain visible for inspection.
+
+```{r}
+#| label: examples
+model_formula <- Y ~ x1 + x2 + x3 + x4 + x5
+
+cont_result <- run_loo(model_formula, cont, gaussian, "identity")
+binary_result <- run_loo(model_formula, binary, binomial, "logit")
+
+print(cont_result)
+summary(binary_result)
+plot_bias(cont_result)
+plot_bias(binary_result)
+```
+
+# Check the implementation
+
+Compare serial and parallel coefficients and predictions, then independently
+fit each omitted-row model with `glm()` and predict that row using
+`type = "response"`. Recalculate the metrics and check the probability range.
+
+```{r}
+#| label: verification
+cont_serial <- run_loo(model_formula, cont, gaussian, "identity", workers = 1L)
+binary_serial <- run_loo(model_formula, binary, binomial, "logit", workers = 1L)
+
+stopifnot(
+  isTRUE(all.equal(cont_result, cont_serial)),
+  isTRUE(all.equal(binary_result, binary_serial))
+)
+
+for (kind in c("continuous", "binary")) {
+  dat <- if (kind == "continuous") cont else binary
+  result <- if (kind == "continuous") cont_result else binary_result
+  family_spec <- if (kind == "continuous") gaussian("identity") else binomial("logit")
+
+  reference <- vapply(seq_len(nrow(dat)), function(i) {
+    fit <- stats::glm(model_formula, data = dat[-i, , drop = FALSE],
+                      family = family_spec)
+    as.numeric(stats::predict(fit, newdata = dat[i, , drop = FALSE],
+                              type = "response"))
+  }, numeric(1))
+
+  stopifnot(
+    length(result$predicted) == nrow(dat),
+    isTRUE(all.equal(result$predicted, reference, check.attributes = FALSE)),
+    isTRUE(all.equal(result$mae, mean(abs(reference - dat$Y)))),
+    isTRUE(all.equal(result$rmse, sqrt(mean((reference - dat$Y)^2))))
+  )
+}
+stopifnot(all(binary_result$predicted >= 0 & binary_result$predicted <= 1))
+cat("All serial/parallel, direct-prediction, and metric checks passed.\n")
+```
