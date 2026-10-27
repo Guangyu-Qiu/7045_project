@@ -12,10 +12,11 @@ output: pdf_document
 #   set.seed(648) my lucky number
 #   for cont.csv, construct:
 #   Y <- beta * X + error
-#   there error ~ N(0,1), X is of (50 * 5) dim,
-#   the five variables follows N(0,1), N(5,5), poisson(3), bern(0.3), uniform(0,10)
+#   there error ~ N(0,1), X is of (50 * 6) dim, the first dim is 1 column
+#   the five variables follows N(0,1 sd), N(5,5 sd), poisson(3 lambda), bern(0.3 as p), uniform(0,10), name as 
 #   let beta <- c(1, 1, -0.5, 2, -2, 0.5)
-#   for binary.csv, Y <- bern(p) where p = logit(beta*X)
+#   for binary.csv, Y <- bern(p) where p = logit^(-1)(beta*X)
+#   assign names to the 6 columns as intercept, x1, x2 ... x5
 ```
 
 
@@ -23,8 +24,8 @@ output: pdf_document
 ```{r}
 #   please input link in string (e.g., "link")
 #   fit_fun(formula(e.g. outcome ~ X1 + X2 + X3), data = dat, family = gaussian, link = identity){}
+#   make sure family argument takes a function, and link is a string
 #   we should construct X matrix and Y by model.matrix and model.response
-#   make sure if the user include 1 in the formula, then 1 column is also included in X
 #   fir <- stats::glm.fit(Y = y, X = X, family = family(link = link)) 
 #   return fit$coefficients
 #   this coefficient should be a vector of estimated coefficients
@@ -37,7 +38,8 @@ output: pdf_document
 ```{r}
 # we want to create the function: predict_fun(beta, dat,formula,family, link) 
 # the first half of this function creates predicted values and calculate statistics
-# which takes beta(the estimated coefficient we get from fit_fun in each loop (and binded into a matrix)), times the matrix of X(remember we should bind the 1 column left to it) 
+# which takes each column of beta(the estimated coefficient we get from fit_fun in each loop (and binded into a matrix)), times each column of the matrix X
+# remember some variables aren't normally distributed, so we need to transfer the prediction back to the response scale by taking inverse of the link
 # pred <- beta times X, which is a vector of nrow length and contain the predicted values for each individual
 # bias <- pred - Y
 # MAE  <-  mean(abs(bias)) (take the abs() of each value of bias and then take the mean)
@@ -45,11 +47,13 @@ output: pdf_document
 # store mae and rmse somewhere, say x(find a better name)
 
 # the second half of this function creates the object of this loo
-# results = list(formula = formula, family = family(link), nrow = nrow(data), ncol = ncol(data))
+# results = list(formula = formula, family = family(link), nrow = nrow(data), ncol = ncol(data), bias (a list that stores all nrow number of bias), mae, rmse)
 # class(results) <- "loo_results"
 # }
-# print_mea.loo_results <- print(x$mea)
-# print_rmse.loo_results <- print(x$rmse)
+# print.loo_results <- function(takes the object x, and print mae)
+# plot_bias.loo_results <- function(takes the object x, and use ggplot2 to plot the histogram of bias)
+# summary.loo_results <- function(takes the object x, and print the formula, number of rows and columns, the model being used(family) and the mae&rmse)
+
 ```
 
 
@@ -61,13 +65,13 @@ output: pdf_document
 # 
 #   res <- vector("list", nrow(data))
 #   before we enter the loop, we want to evenly split the work to 4 cores by:
-#     cl <- parallel::makePSOCKcluster() 
-#   and parallel::parLapplyLB() after this loop, and then combine the results
+#     cl <- parallel::makePSOCKcluster(4L) 
+#   then we pass functions to the clusters and use parallel::parLapplyLB()
 #   
 #   for i in 1:nrow(data)
-#     data[-i]
+#     data[-i, drop = false]
 #     call fit_fun and get estimated coefficients beta, store in res[[i]]
-#   
+#   end cluster here
 #   after this loop we bind this res from vector of lists to a matrix
 #   call predict_fun and return the object
 ```
