@@ -7,16 +7,32 @@ output: pdf_document
 
 # Task1: we need to generate two dataset to test how my code works
 ```{r}
-# use here function to store and read any data
-# generate two dataset in data/cont.csv and binary.csv
-# for cont.csv, construct:
-  # Y <- beta * X + error
-# there error ~ N(0,1), X is of (50 * 5) dim,
-# the five variables follows N(0,1), N(5,5), poisson(3), bern(0.3), uniform(0,10)
-# let beta <- c(1, 1, -0.5, 2, -2, 0.5)
-
-# for binary.csv, Y <- bern(p) where p = logit(beta*X)
+#   use here function to store and read any data
+#   generate two dataset in data/cont.csv and binary.csv
+#   set.seed(648) my lucky number
+#   for cont.csv, construct:
+#   Y <- beta * X + error
+#   there error ~ N(0,1), X is of (50 * 5) dim,
+#   the five variables follows N(0,1), N(5,5), poisson(3), bern(0.3), uniform(0,10)
+#   let beta <- c(1, 1, -0.5, 2, -2, 0.5)
+#   for binary.csv, Y <- bern(p) where p = logit(beta*X)
 ```
 
 
-# Task 2:
+# Task 2: the function that takes formula, dataset, family and link(string) as input and fit glm function, extract the results that we need(we only need to save the coefficients so that we can make predictions)
+```{r}
+#   please input link in string (e.g., "link")
+#   run_loo(formula(e.g. outcome ~ X1 + X2 + X3), data = dat, family = gaussian, link = identity){}
+#   we should construct X matrix and Y by model.matrix and model.response
+#   make sure if the user include 1 in the formula, then 1 column is also included in X
+#   fir <- stats::glm.fit(Y = y, X = X, family = family(link = link)) 
+#   return fit$coefficients
+#   this coefficient should be a vector of estimated coefficients
+#   }
+```
+
+# Task 3: create the function that split the dataset for LOO
+```{r}
+crossvalid()
+```
+
