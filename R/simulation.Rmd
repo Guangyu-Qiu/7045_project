@@ -22,7 +22,7 @@ output: pdf_document
 # Task 2: the function that takes formula, dataset, family and link(string) as input and fit glm function, extract the results that we need(we only need to save the coefficients so that we can make predictions)
 ```{r}
 #   please input link in string (e.g., "link")
-#   run_loo(formula(e.g. outcome ~ X1 + X2 + X3), data = dat, family = gaussian, link = identity){}
+#   fit_fun(formula(e.g. outcome ~ X1 + X2 + X3), data = dat, family = gaussian, link = identity){}
 #   we should construct X matrix and Y by model.matrix and model.response
 #   make sure if the user include 1 in the formula, then 1 column is also included in X
 #   fir <- stats::glm.fit(Y = y, X = X, family = family(link = link)) 
@@ -33,9 +33,31 @@ output: pdf_document
 
 # Task 3: create the function that split the dataset for LOO: data_loo is the dataset without the leave out individual and dat_i is the row for that individual which we will use for prediction
 ```{r}
-# create crosssplit(data, i) function that takes a dataset and split the dataset into data_loo and data_i. 
+# create split_fun(data, i) function that takes a dataset and split the dataset into data_loo and data_i. 
 # data_loo <- dat[-i]
 # data_i <- dat[i]
 # return result as a list that consists both dataset so that we can call result$data_loo
 ```
+
+# Task 4: write a function that takes the output from fit_fun(which is the estimated coefficients from glm) and produce prediction for the omitted row. Then, this function will calculate error, MAE and RMSE based on predicted and observed values. Then, it shall produce an object which consists of a print method to print MAE an RMSE
+```{r}
+we want to create the function: predict_fun(beta, dat) 
+the first half of this function creates predicted values and calculate statistics
+which takes beta(the estimated coefficient we get from fit_fun in each loop (and binded into a matrix)), times the matrix of X(remember we should bind the 1 column left to it) 
+pred <- beta times X, which is a vector of nrow length and contain the predicted values for each individual
+bias <- pred - Y
+MAE  <-  mean(abs(bias)) (take the abs() of each value of bias and then take the mean)
+rmse <- sqrt(mean(bias^2))(root mean square error)
+store mae and rmse somewhere, say x(find a better name)
+
+the second half of this function creates the object of this loo
+
+results = list(formula = xxx, family = xxx, nrow = nrow, ncol = ncol)
+class(results) <- "loo_results"
+}
+
+print_mea.loo_results <- print(x$mea)
+print_rmse.loo_results <- print(x$rmse)
+```
+
 
