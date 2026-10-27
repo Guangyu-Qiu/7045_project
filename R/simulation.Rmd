@@ -31,8 +31,11 @@ output: pdf_document
 #   }
 ```
 
-# Task 3: create the function that split the dataset for LOO
+# Task 3: create the function that split the dataset for LOO: data_loo is the dataset without the leave out individual and dat_i is the row for that individual which we will use for prediction
 ```{r}
-crossvalid()
+# create crosssplit(data, i) function that takes a dataset and split the dataset into data_loo and data_i. 
+# data_loo <- dat[-i]
+# data_i <- dat[i]
+# return result as a list that consists both dataset so that we can call result$data_loo
 ```
 
