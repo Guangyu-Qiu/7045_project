@@ -31,33 +31,44 @@ output: pdf_document
 #   }
 ```
 
-# Task 3: create the function that split the dataset for LOO: data_loo is the dataset without the leave out individual and dat_i is the row for that individual which we will use for prediction
+
+
+# Task 3: write a function that takes the output from fit_fun(which is the estimated coefficients from glm) and produce prediction for the omitted row. Then, this function will calculate error, MAE and RMSE based on predicted and observed values. Then, it shall produce an object which consists of a print method to print MAE an RMSE
 ```{r}
-# create split_fun(data, i) function that takes a dataset and split the dataset into data_loo and data_i. 
-# data_loo <- dat[-i]
-# data_i <- dat[i]
-# return result as a list that consists both dataset so that we can call result$data_loo
+# we want to create the function: predict_fun(beta, dat,formula,family, link) 
+# the first half of this function creates predicted values and calculate statistics
+# which takes beta(the estimated coefficient we get from fit_fun in each loop (and binded into a matrix)), times the matrix of X(remember we should bind the 1 column left to it) 
+# pred <- beta times X, which is a vector of nrow length and contain the predicted values for each individual
+# bias <- pred - Y
+# MAE  <-  mean(abs(bias)) (take the abs() of each value of bias and then take the mean)
+# rmse <- sqrt(mean(bias^2))(root mean square error)
+# store mae and rmse somewhere, say x(find a better name)
+
+# the second half of this function creates the object of this loo
+# results = list(formula = formula, family = family(link), nrow = nrow(data), ncol = ncol(data))
+# class(results) <- "loo_results"
+# }
+# print_mea.loo_results <- print(x$mea)
+# print_rmse.loo_results <- print(x$rmse)
 ```
 
-# Task 4: write a function that takes the output from fit_fun(which is the estimated coefficients from glm) and produce prediction for the omitted row. Then, this function will calculate error, MAE and RMSE based on predicted and observed values. Then, it shall produce an object which consists of a print method to print MAE an RMSE
+
+# Task 4: the function that combines everything and actually runs loo
 ```{r}
-we want to create the function: predict_fun(beta, dat) 
-the first half of this function creates predicted values and calculate statistics
-which takes beta(the estimated coefficient we get from fit_fun in each loop (and binded into a matrix)), times the matrix of X(remember we should bind the 1 column left to it) 
-pred <- beta times X, which is a vector of nrow length and contain the predicted values for each individual
-bias <- pred - Y
-MAE  <-  mean(abs(bias)) (take the abs() of each value of bias and then take the mean)
-rmse <- sqrt(mean(bias^2))(root mean square error)
-store mae and rmse somewhere, say x(find a better name)
-
-the second half of this function creates the object of this loo
-
-results = list(formula = xxx, family = xxx, nrow = nrow, ncol = ncol)
-class(results) <- "loo_results"
-}
-
-print_mea.loo_results <- print(x$mea)
-print_rmse.loo_results <- print(x$rmse)
+# this is the function to be called
+# this is also where parallel processing works
+# run_loo(formula, family, link, data)
+# 
+#   res <- vector("list", nrow(data))
+#   before we enter the loop, we want to evenly split the work to 4 cores by:
+#     cl <- parallel::makePSOCKcluster() 
+#   and parallel::parLapplyLB() after this loop, and then combine the results
+#   
+#   for i in 1:nrow(data)
+#     data[-i]
+#     call fit_fun and get estimated coefficients beta, store in res[[i]]
+#   
+#   after this loop we bind this res from vector of lists to a matrix
+#   call predict_fun and return the object
 ```
-
 
