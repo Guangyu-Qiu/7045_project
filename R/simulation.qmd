@@ -5,9 +5,71 @@ date: "2026-10-27"
 format: html
 ---
 
-This implements the four tasks in `simulation.Rmd`. The original pseudocode is
-unchanged. Run the chunks in order, or render this document. Dependencies are
-`here` and `ggplot2`; `parallel` is included with R.
+# Project overview
+
+This project develops reusable R functions for leave-one-out (LOO) validation
+of generalized linear models. Each subject is held out once; a model fitted
+to the other subjects predicts that subject's outcome. The functions return
+the LOO predictions, prediction errors, MAE, and RMSE in an S3 result object.
+
+Two sample datasets illustrate the same workflow: one with a continuous
+outcome and one with a binary outcome. Both contain the **same 50 subjects
+and the same five predictor values**. Only the outcome-generation model
+changes. The binary outcome is sampled from a Bernoulli distribution using
+a modeled probability; it is not created by thresholding the continuous
+outcome. Predictor distributions do not determine the GLM family or link.
+
+| Predictor | Generating distribution | Parameters |
+|:--|:--|:--|
+| `x1` | Normal | Mean 0, SD 1 |
+| `x2` | Normal | Mean 5, SD 5 |
+| `x3` | Poisson | Rate 3 |
+| `x4` | Bernoulli | Probability 0.3 |
+| `x5` | Uniform | Minimum 0, maximum 10 |
+
+For the continuous outcome, $Y = X\beta + \varepsilon$, with
+$\varepsilon \sim N(0,1)$ (SD 1). For the binary outcome,
+$p = \operatorname{logit}^{-1}(X\beta)$ and $Y \sim \operatorname{Bernoulli}(p)$.
+The design matrix includes an intercept; the two coefficient vectors are
+shown in the data-generation code below.
+
+# Code structure and execution order
+
+The implementation follows the four tasks in the original pseudocode,
+`simulation.Rmd`. Run the chunks in order, or render this document.
+Dependencies are `here` and `ggplot2`; `parallel` is included with R.
+
+| Function | Main inputs | Output or displayed result |
+|:--|:--|:--|
+| `fit_fun()` | Formula, training data, family function, link string | Named vector of fitted coefficients |
+| `predict_fun()` | LOO coefficient matrix, original data, formula, family, link | Response-scale predictions, errors, MAE and RMSE in a `loo_results` object |
+| `run_loo()` | Formula, full data, family, link, number of workers | Runs all omitted-row fits and returns the result from `predict_fun()` |
+| `print.loo_results()` | Result object | Prints MAE and RMSE; invisibly returns the object |
+| `summary.loo_results()` | Result object | Prints model settings, data dimensions and metrics; invisibly returns the object |
+| `plot_bias()` / `plot_bias.loo_results()` | Result object; histogram bin count | Dispatches to the S3 method and returns a prediction-error histogram |
+
+**Execution order**
+
+1. Generate and save the two example datasets.
+2. Define the fitting function, prediction function, and S3 methods.
+3. Call `run_loo()` with a formula, dataset, family and link.
+4. For each row `i`, fit the model without that row by calling `fit_fun()`.
+5. Bind the coefficient vectors into a matrix: row `i` belongs to the model
+   that omitted subject `i`.
+6. Call `predict_fun()` to match each subject to its own omitted-row
+   coefficients, apply the inverse link, and create the result object.
+7. Inspect the result using `print()`, `summary()`, and `plot_bias()`.
+
+**Parallel computation**
+
+With `workers = 1`, `run_loo()` uses `lapply()`. With more workers, it starts
+a PSOCK cluster (four workers by default), exports the required function
+and inputs, and runs the independent fits with `parLapplyLB()`. Tasks go
+to available workers dynamically, so the allocation need not contain
+exactly the same number of fits per worker. The returned list preserves
+the original row order. `on.exit()` closes the cluster when the function
+exits, including after an error. This example checks agreement between
+serial and parallel results; it does not benchmark a speed improvement.
 
 # Task 1: Generate two datasets
 
@@ -49,6 +111,96 @@ write.csv(binary, here::here("Data", "binary.csv"), row.names = FALSE)
 cont <- read.csv(here::here("Data", "cont.csv"))
 binary <- read.csv(here::here("Data", "binary.csv"))
 table(binary$Y)
+```
+
+## A first look at the generated data
+
+The table summarizes the realized predictor values, which are identical
+in the two datasets. These sample summaries need not equal the generating
+parameters exactly.
+
+```{r}
+#| label: predictor-summary
+#| echo: false
+predictor_names <- paste0("x", 1:5)
+predictor_summary <- data.frame(
+  Predictor = predictor_names,
+  Mean = vapply(cont[predictor_names], mean, numeric(1)),
+  SD = vapply(cont[predictor_names], sd, numeric(1)),
+  Minimum = vapply(cont[predictor_names], min, numeric(1)),
+  Maximum = vapply(cont[predictor_names], max, numeric(1)),
+  row.names = NULL
+)
+knitr::kable(predictor_summary, digits = 2)
+```
+
+Histograms show the continuous predictors; count bars show the discrete
+predictors. Each panel uses its own axes so all five distributions remain
+visible despite their different ranges.
+
+```{r}
+#| label: predictor-distributions
+#| echo: false
+#| fig-width: 10
+#| fig-height: 5.4
+#| fig-cap: "The five predictors shared by the continuous and binary datasets."
+predictor_long <- stack(cont[predictor_names])
+ggplot2::ggplot(mapping = ggplot2::aes(x = values)) +
+  ggplot2::geom_histogram(
+    data = subset(predictor_long, ind %in% c("x1", "x2", "x5")),
+    bins = 10, fill = "steelblue", color = "white"
+  ) +
+  ggplot2::geom_bar(
+    data = subset(predictor_long, ind %in% c("x3", "x4")),
+    width = 0.8, fill = "steelblue", color = "white"
+  ) +
+  ggplot2::facet_wrap(~ ind, scales = "free", ncol = 3) +
+  ggplot2::labs(x = "Observed value", y = "Count") +
+  ggplot2::theme_minimal(base_size = 12)
+```
+
+The outcome summary and plots show a continuous response and a 0/1
+response. For the binary outcome, the mean is the observed event proportion.
+
+```{r}
+#| label: outcome-summary
+#| echo: false
+outcome_summary <- data.frame(
+  Dataset = c("Continuous", "Binary"),
+  N = c(nrow(cont), nrow(binary)),
+  Mean = c(mean(cont$Y), mean(binary$Y)),
+  SD = c(sd(cont$Y), sd(binary$Y)),
+  Minimum = c(min(cont$Y), min(binary$Y)),
+  Maximum = c(max(cont$Y), max(binary$Y))
+)
+knitr::kable(outcome_summary, digits = 2)
+```
+
+```{r}
+#| label: continuous-outcome
+#| echo: false
+#| fig-width: 7
+#| fig-height: 3.8
+#| fig-cap: "Distribution of the simulated continuous outcome."
+ggplot2::ggplot(cont, ggplot2::aes(x = Y)) +
+  ggplot2::geom_histogram(bins = 10, fill = "steelblue", color = "white") +
+  ggplot2::labs(title = "Continuous outcome", x = "Y", y = "Count") +
+  ggplot2::theme_minimal(base_size = 12)
+```
+
+```{r}
+#| label: binary-outcome
+#| echo: false
+#| fig-width: 7
+#| fig-height: 3.8
+#| fig-cap: "Counts of the two simulated binary outcome values."
+ggplot2::ggplot(binary, ggplot2::aes(x = factor(Y, levels = c(0, 1)))) +
+  ggplot2::geom_bar(fill = "steelblue", width = 0.6) +
+  ggplot2::geom_text(ggplot2::aes(label = ggplot2::after_stat(count)),
+                     stat = "count", vjust = -0.4) +
+  ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.12))) +
+  ggplot2::labs(title = "Binary outcome", x = "Y", y = "Count") +
+  ggplot2::theme_minimal(base_size = 12)
 ```
 
 # Task 2: Fit one model and return its coefficients
@@ -312,3 +464,16 @@ for (kind in c("continuous", "binary")) {
 stopifnot(all(binary_result$predicted >= 0 & binary_result$predicted <= 1))
 cat("All serial/parallel, direct-prediction, and metric checks passed.\n")
 ```
+
+# AI use disclosure
+
+The original four-task pseudocode was written entirely by Guangyu Qiu and
+is preserved in [`simulation.Rmd`](simulation.Rmd), located at
+`R/simulation.Rmd` relative to the project root. AI converted that pseudocode
+into executable R code in this document. AI also assisted with the
+explanatory text, data displays, and presentation materials.
+
+The verification code compares serial and parallel results, independently
+fits every omitted-row model using `glm()` and predicts the held-out row
+with `type = "response"`, recalculates MAE and RMSE, and checks that binary
+predictions fall between 0 and 1. The resulting check output is shown above.

@@ -76,3 +76,7 @@ output: pdf_document
 #   call predict_fun and return the object
 ```
 
+```{r}
+# R in one folder, other things (report) in other folders
+```
+
