@@ -107,7 +107,7 @@ summary(binary_result)
 ```
 
 {{< pagebreak >}}
-
+ 
 The continuous model has MAE `r sprintf("%.3f", cont_result$mae)` and RMSE `r sprintf("%.3f", cont_result$rmse)`. The binary model has MAE `r sprintf("%.3f", binary_result$mae)` and RMSE `r sprintf("%.3f", binary_result$rmse)`. These binary scores compare estimated probabilities with realized zero or one outcomes. They can remain substantial even when the probability model is correctly specified.
 
 The plotting method displays the distribution of the individual LOO errors.
