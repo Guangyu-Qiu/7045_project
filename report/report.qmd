@@ -1,0 +1,150 @@
+---
+title: "Leave-one-out validation for generalized linear models"
+author: "Guangyu Qiu"
+format:
+  pdf:
+    documentclass: article
+    pdf-engine: pdflatex
+    fontsize: 11pt
+    geometry: margin=0.8in
+    colorlinks: true
+  html:
+    embed-resources: true
+    toc: false
+number-sections: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+
+# Problem and motivation
+
+Cross-validation evaluates predictive performance by testing a model on observations excluded from its training data. This helps assess how a model specification or fitting procedure predicts new subjects from the same population. A simple approach randomly splits the data into training and testing sets in a 2:1 ratio. However, the result depends on the random split, and using fewer observations for training reduces information available for estimation and can reduce statistical power. In $K$-fold cross-validation, $K$ is the number of approximately equal groups. Each group is tested once after fitting on the other $K-1$ groups. Ten folds are commonly used. When evaluating a procedure that selects variables or models, selection must also occur within each training fold. Cross-validation can therefore assess an entire modeling procedure, as well as a fixed model specification. Leave-one-out validation, abbreviated LOO, uses $K=n$, where $n$ is the number of subjects. It fits on $n-1$ subjects and predicts the omitted subject in each round. This preserves almost all observations for training and is useful for small datasets, although it requires $n$ fits.
+
+This project summarizes the accuracy of point predictions with mean absolute error, abbreviated MAE, and root mean square error, abbreviated RMSE. Let $i$ index subjects from $1$ to $n$, let $y_i$ be subject $i$'s observed outcome, and let $\widehat y_i$ be the prediction from a model fitted without that subject. Define the prediction error as $e_i=\widehat y_i-y_i$. Then
+
+$$
+\mathrm{MAE}=\frac{1}{n}\sum_{i=1}^{n}|e_i|,
+\qquad
+\mathrm{RMSE}=\sqrt{\frac{1}{n}\sum_{i=1}^{n}e_i^2}.
+$$
+
+Both metrics use the outcome's scale, and smaller values indicate better predictions on the same evaluation data. RMSE gives greater weight to large errors. For a binary outcome, the prediction is an estimated event probability and the observed outcome is zero or one.
+
+The programming problem is to make LOO prediction easier for users of generalized linear models, abbreviated GLMs. Without reusable functions, users must repeatedly omit rows, fit models, align coefficients with the correct subjects, transform predictions to the response scale, and calculate error summaries. The functions in this project automate those steps and return one object that can be printed, summarized, and plotted. They support the examples below without requiring users to recreate the LOO loop.
+
+{{< pagebreak >}}
+
+# Using the functions
+
+From this report's directory, source `R/main.R` to load the functions, generate example data and run the demonstrations and verification checks. The sourcing output is hidden here.
+
+```{r}
+#| label: load-functions
+#| results: hide
+#| fig-show: hide
+source("../R/main.R")
+```
+
+`family` is a function such as `gaussian` or `binomial`. `link` is a string such as `"identity"` or `"logit"`.
+
+| Function | Main inputs | Output |
+|:--|:--|:--|
+| `fit_fun()` | `formula`, training `data`, `family`, `link` | Named vector of fitted coefficients |
+| `predict_fun()` | `beta`, original `dat`, `formula`, `family`, `link` | A `loo_results` object |
+| `run_loo()` | `formula`, complete `data`, `family`, `link`, `workers` | Runs all omitted-row fits and returns a `loo_results` object |
+
+For `predict_fun()`, row `i` of the matrix `beta` contains coefficients fitted without subject `i`. Column names match the design matrix, including its intercept. The function pairs subjects with their omitted-row coefficients and applies the inverse link. Users normally call `run_loo()` directly. Its default `workers = 1L` runs serially. A larger positive integer starts a parallel cluster that closes when the function exits.
+
+The returned S3 object has the following contents. S3 provides methods selected according to an object's class.
+
+| Component | Meaning |
+|:--|:--|
+| `formula`, `family` | Model formula and family specification, including the link |
+| `nrow`, `ncol` | Numbers of rows and columns in the input data frame |
+| `coefficients` | Matrix of omitted-row coefficient estimates |
+| `observed`, `predicted` | Observed responses and corresponding LOO predictions |
+| `bias` | Individual errors, computed as predicted minus observed |
+| `mae`, `rmse` | MAE and RMSE across all subjects |
+
+The field `bias` contains individual prediction errors, not statistical bias across repeated simulations. For an object named `result`, the three S3 methods are:
+
+- `print(result)` displays MAE and RMSE and invisibly returns the object.
+- `summary(result)` displays the formula, dimensions, family, link and metrics and invisibly returns the object.
+- `plot(result, bins = 10L)` returns a ggplot error histogram. `bins` is the number of bins.
+
+These examples use numeric predictors and responses, no missing values, and unweighted GLMs. Data-dependent transformations, new factor levels, offsets and weights require additional handling.
+
+{{< pagebreak >}}
+
+# Simulation example and results
+
+The sourced script uses random seed 648 to generate two datasets with the same $n=50$ subjects and the same five predictors. In the table below, $x_{ji}$ is the value of predictor $j$ for subject $i$, where $j$ ranges from 1 to 5. SD denotes standard deviation.
+
+| Predictor | Distribution | Parameters |
+|:--|:--|:--|
+| $x_{1i}$ | Normal | Mean 0, SD 1 |
+| $x_{2i}$ | Normal | Mean 5, SD 5 |
+| $x_{3i}$ | Poisson | Rate 3 |
+| $x_{4i}$ | Bernoulli | Probability 0.3 |
+| $x_{5i}$ | Uniform | Minimum 0, maximum 10 |
+
+Predictors are generated independently across variables and subjects. Define $z_i=(1,x_{1i},x_{2i},x_{3i},x_{4i},x_{5i})^{\mathsf T}$ as the predictor vector including an intercept. The superscript $\mathsf T$ denotes transposition. The continuous and binary coefficient vectors are
+
+$$
+\begin{aligned}
+\beta_c&=(1,1,-0.5,2,-2,0.5)^{\mathsf T},\\
+\beta_b&=(-1,0.3,-0.1,0.3,-0.5,0.1)^{\mathsf T}.
+\end{aligned}
+$$
+
+The subscripts $c$ and $b$ identify the continuous and binary models. The continuous response is $Y_{ci}=z_i^{\mathsf T}\beta_c+\varepsilon_i$, where $\varepsilon_i$ is an independent normal error with mean zero and variance one. For the binary response, define the true event probability as $p_i=1/\{1+\exp(-z_i^{\mathsf T}\beta_b)\}$, where $\exp$ is the exponential function. The response $Y_{bi}$ is drawn from a Bernoulli distribution with probability $p_i$. Binary outcomes are sampled directly, rather than obtained by thresholding continuous responses. `cont` and `binary` are the corresponding data frames created by the sourced script. Their `Y` columns contain the outcomes.
+
+The formula below automatically includes an intercept. These calls use a Gaussian family with identity link for the continuous response and a binomial family with logit link for the binary response.
+
+```{r}
+#| label: fit-examples
+model_formula <- Y ~ x1 + x2 + x3 + x4 + x5
+cont_result <- run_loo(model_formula, cont, gaussian, "identity")
+binary_result <- run_loo(model_formula, binary, binomial, "logit")
+print(cont_result)
+summary(binary_result)
+```
+
+{{< pagebreak >}}
+
+The continuous model has MAE `r sprintf("%.3f", cont_result$mae)` and RMSE `r sprintf("%.3f", cont_result$rmse)`, consistent with prediction error on the scale of the generating error SD of one. The binary model has MAE `r sprintf("%.3f", binary_result$mae)` and RMSE `r sprintf("%.3f", binary_result$rmse)`. These binary scores compare estimated probabilities with realized zero or one outcomes. They can remain substantial even when the probability model is correctly specified.
+
+For a known true probability, Bernoulli variation gives
+
+$$
+\mathrm{E}\big[(p_i-Y_{bi})^2\mid p_i\big]=p_i(1-p_i),
+$$
+
+where $\mathrm{E}$ denotes expectation over possible Bernoulli outcomes conditional on $p_i$. For these simulated predictors, the square root of the average conditional expected squared error is `r sprintf("%.3f", sqrt(mean(p * (1 - p))))`. This is a reference for outcome uncertainty, not a lower bound on RMSE in every realized sample. It explains why increasing sample size cannot make binary outcome error vanish, even as probability estimates improve.
+
+The following comparison uses probabilities and metrics already computed by `R/main.R`.
+
+```{r}
+#| label: binary-benchmark
+#| echo: false
+knitr::kable(binary_scores[c("Predictor", "MAE", "RMSE")],
+             digits = 3, row.names = FALSE,
+             caption = "Binary outcome scores on the same 50 subjects.")
+```
+
+The intercept-only LOO predictor uses the event proportion among the other 49 subjects. The known-probability row uses the generating probabilities and is available only in a simulation. The magnitude of the binary errors is compatible with outcome randomness and coefficient estimation from a small training sample. However, the fitted model does not improve RMSE over the intercept-only predictor in this particular realization. Thus, a plausible error magnitude does not establish strong predictive performance.
+
+The plotting method displays the distribution of the individual LOO errors.
+
+```{r}
+#| label: binary-errors
+#| fig-width: 6
+#| fig-height: 2.0
+#| fig-cap: "Binary LOO prediction errors, defined as predicted probability minus observed outcome."
+plot(binary_result)
+```
+
+**AI disclosure.** AI assisted with coding based on my pseudocode and with grammatical improvements to the writing. The content and ideas are my own.
